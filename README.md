@@ -73,5 +73,5 @@ All other keys go to the page.
 
 ## Debugging
 
-Servo writes its log to `servo-term.log` in the current directory.
+Servo writes its log to `~/.cache/servo-term/servo-term.log` (set `SERVO_TERM_LOG` to change it).
 `SERVO_TERM_SNAPSHOT=frame.png` saves each frame to a PNG file (this is slow).

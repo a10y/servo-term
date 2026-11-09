@@ -192,9 +192,21 @@ impl EventLoopWaker for Waker {
     fn wake(&self) {}
 }
 
+/// Where Servo's log goes: $SERVO_TERM_LOG, else ~/.cache/servo-term/servo-term.log.
+fn log_path() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("SERVO_TERM_LOG") {
+        return p.into();
+    }
+    let home = std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into());
+    let dir = std::path::Path::new(&home).join(".cache/servo-term");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("servo-term.log")
+}
+
 /// Send Servo's stderr logging to a file so it does not draw over the page.
 fn redirect_stderr() {
-    if let Ok(f) = OpenOptions::new().create(true).append(true).open("servo-term.log") {
+    // Truncate on each start so the log does not grow forever.
+    if let Ok(f) = OpenOptions::new().create(true).write(true).truncate(true).open(log_path()) {
         unsafe { libc::dup2(f.as_raw_fd(), libc::STDERR_FILENO) };
         std::mem::forget(f);
     }
