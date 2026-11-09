@@ -1,0 +1,14 @@
+[package]
+name = "servo-term"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64 = "0.23.1"
+dpi = "0.1"
+euclid = "0.22.14"
+libc = "0.2.191"
+rustls = "0.23.46"
+servo = "0.8.0"
+signal-hook = "0.4.6"
+url = "2"
