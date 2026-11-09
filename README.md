@@ -12,6 +12,22 @@ WebGL 1, WebGL 2, and WebGPU are on. WebGL runs on the software GL renderer
 (slow for heavy scenes). WebGPU uses the real GPU through wgpu (Metal on macOS).
 WebGPU needs a page with a host name: it does not work on `file://` URLs.
 
+### PDFs
+
+Servo has no PDF viewer, so `servo-term` adds one. It renders each page to an
+image with [hayro](https://github.com/LaurenzV/hayro), a pure-Rust PDF
+rasterizer, and serves the pages to Servo through a private `pdf:` URL scheme.
+
+- Links and URLs that end in `.pdf` open in the viewer.
+- A PDF served from a URL without `.pdf` (for example `arxiv.org/pdf/…`) is
+  detected after it loads and then opens in the viewer.
+- Local files work too: `servo-term ~/Downloads/paper.pdf`, or type the path in
+  the URL bar.
+
+You cannot select text in PDFs, because the pages are images. Some PDFs with
+blend modes or transparency groups render with wrong colors (hayro does not
+support those yet).
+
 ## Requirements
 
 - A terminal that supports the Kitty graphics protocol with shared memory

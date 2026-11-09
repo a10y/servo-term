@@ -7,6 +7,7 @@
 //! Usage: servo-term [URL] [--scale F] [--dpr F]
 
 mod input;
+mod pdf;
 mod term;
 
 use std::cell::{Cell, RefCell};
@@ -25,9 +26,10 @@ use servo::{
     Code, CreateNewWebViewRequest, Cursor, DeviceIntPoint, DeviceIntRect, DevicePoint,
     DeviceVector2D, EmbedderControl, EventLoopWaker, InputEvent, Key, KeyState, KeyboardEvent,
     LoadStatus, Location, Modifiers, MouseButton, MouseButtonAction, MouseButtonEvent,
-    MouseMoveEvent, NamedKey, Preferences, RenderingContext, Scroll, Servo, ServoBuilder, SimpleDialog,
+    MouseMoveEvent, NamedKey, NavigationRequest, Preferences, RenderingContext, Scroll, Servo, ServoBuilder, SimpleDialog,
     SoftwareRenderingContext, WebView, WebViewBuilder, WebViewDelegate,
 };
+use servo::protocol_handler::ProtocolRegistry;
 use url::Url;
 
 use input::{Ev, Parser};
@@ -73,7 +75,24 @@ fn parse_opts() -> Opts {
 /// Turn URL-bar text into a URL: full URLs as-is, host-like text gets a
 /// scheme, anything else becomes a search.
 fn normalize_url(text: &str) -> Url {
+    let url = normalize_url_inner(text);
+    pdf::route(&url).unwrap_or(url)
+}
+
+fn normalize_url_inner(text: &str) -> Url {
     let text = text.trim();
+    // A local path (absolute, ~/, or relative to the current directory).
+    let expanded = match text.strip_prefix("~/") {
+        Some(rest) => std::env::var("HOME").map(|h| format!("{h}/{rest}")).unwrap_or_default(),
+        None => text.to_string(),
+    };
+    if !text.contains("://") && std::path::Path::new(&expanded).is_file() {
+        if let Ok(abs) = std::fs::canonicalize(&expanded) {
+            if let Ok(url) = Url::from_file_path(abs) {
+                return url;
+            }
+        }
+    }
     if let Ok(url) = Url::parse(text) {
         if text.contains("://") || ["about", "data", "file"].contains(&url.scheme()) {
             return url;
@@ -108,8 +127,24 @@ impl WebViewDelegate for Delegate {
     fn notify_new_frame_ready(&self, _: WebView) {
         self.frame_ready.set(true);
     }
-    fn notify_load_status_changed(&self, _: WebView, _: LoadStatus) {
+    fn notify_load_status_changed(&self, webview: WebView, status: LoadStatus) {
         self.chrome_dirty.set(true);
+        // A PDF without a .pdf URL shows Servo's "Unknown content type" page; the
+        // script swaps it for our viewer.
+        let is_web = webview.url().is_some_and(|u| matches!(u.scheme(), "http" | "https"));
+        if status == LoadStatus::Complete && is_web {
+            webview.evaluate_javascript(pdf::DETECT_SCRIPT, |_| {});
+        }
+    }
+    fn request_navigation(&self, webview: WebView, request: NavigationRequest) {
+        // Links to .pdf files go straight to the viewer.
+        match pdf::route(&request.url) {
+            Some(viewer) => {
+                request.deny();
+                webview.load(viewer);
+            }
+            None => request.allow(),
+        }
     }
     fn notify_url_changed(&self, _: WebView, _: Url) {
         self.chrome_dirty.set(true);
@@ -163,6 +198,13 @@ fn redirect_stderr() {
         unsafe { libc::dup2(f.as_raw_fd(), libc::STDERR_FILENO) };
         std::mem::forget(f);
     }
+}
+
+/// The URL to show in the URL bar: for the PDF viewer, the PDF's own URL.
+fn shown_url(wv: &WebView) -> String {
+    wv.url()
+        .map(|u| pdf::display_url(&u).unwrap_or_else(|| u.to_string()))
+        .unwrap_or_default()
 }
 
 /// CSS cursor name for OSC 22 (pointer shape).
@@ -310,13 +352,7 @@ impl App {
     }
 
     fn start_url_edit(&mut self) {
-        let text: Vec<char> = self
-            .webview()
-            .url()
-            .map(|u| u.to_string())
-            .unwrap_or_default()
-            .chars()
-            .collect();
+        let text: Vec<char> = shown_url(self.webview()).chars().collect();
         let caret = text.len();
         self.url_edit = Some(UrlEdit { text, caret, all_selected: true });
         self.delegate.chrome_dirty.set(true);
@@ -644,7 +680,7 @@ impl App {
                 }
             }
             None => {
-                let url = wv.url().map(|u| u.to_string()).unwrap_or_default();
+                let url = shown_url(wv);
                 out.extend(url.chars().take(avail));
             }
         }
@@ -750,6 +786,11 @@ fn main() {
     prefs.dom_webgpu_enabled = true;
     let servo = ServoBuilder::default()
         .preferences(prefs)
+        .protocol_registry({
+            let mut protocols = ProtocolRegistry::default();
+            protocols.register("pdf", pdf::PdfProtocol).expect("register pdf: scheme");
+            protocols
+        })
         .event_loop_waker(Box::new(Waker))
         .build();
     let delegate = Rc::new(Delegate {
