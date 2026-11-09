@@ -8,6 +8,10 @@ using POSIX shared memory (`t=s`), so moving the pixels takes almost no time.
 Mouse, keyboard, and paste input from the terminal go back to Servo, so you can
 click links, drag to select text, fill in forms, and enter URLs.
 
+WebGL 1, WebGL 2, and WebGPU are on. WebGL runs on the software GL renderer
+(slow for heavy scenes). WebGPU uses the real GPU through wgpu (Metal on macOS).
+WebGPU needs a page with a host name: it does not work on `file://` URLs.
+
 ## Requirements
 
 - A terminal that supports the Kitty graphics protocol with shared memory

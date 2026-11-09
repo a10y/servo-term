@@ -25,7 +25,7 @@ use servo::{
     Code, CreateNewWebViewRequest, Cursor, DeviceIntPoint, DeviceIntRect, DevicePoint,
     DeviceVector2D, EmbedderControl, EventLoopWaker, InputEvent, Key, KeyState, KeyboardEvent,
     LoadStatus, Location, Modifiers, MouseButton, MouseButtonAction, MouseButtonEvent,
-    MouseMoveEvent, NamedKey, RenderingContext, Scroll, Servo, ServoBuilder, SimpleDialog,
+    MouseMoveEvent, NamedKey, Preferences, RenderingContext, Scroll, Servo, ServoBuilder, SimpleDialog,
     SoftwareRenderingContext, WebView, WebViewBuilder, WebViewDelegate,
 };
 use url::Url;
@@ -743,7 +743,15 @@ fn main() {
     );
     ctx.make_current().expect("make_current failed");
 
-    let servo = ServoBuilder::default().event_loop_waker(Box::new(Waker)).build();
+    // WebGL 1 is on whenever the `webgl` feature is compiled in; WebGL 2 and
+    // WebGPU are off by default in Servo's preferences.
+    let mut prefs = Preferences::default();
+    prefs.dom_webgl2_enabled = true;
+    prefs.dom_webgpu_enabled = true;
+    let servo = ServoBuilder::default()
+        .preferences(prefs)
+        .event_loop_waker(Box::new(Waker))
+        .build();
     let delegate = Rc::new(Delegate {
         rendering_context: ctx.clone(),
         frame_ready: Cell::new(false),
