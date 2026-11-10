@@ -38,6 +38,11 @@ use term::{Geom, Kitty};
 /// Column where the URL starts in the toolbar (after " ←  →  ↻  │ ").
 const TOOLBAR_URL_COL: usize = 11;
 
+/// Frame-rate cap: at most 30 frames per second. Full-screen RGBA frames are
+/// large, and the terminal can ack a frame before it has drawn it, so the ack
+/// alone does not stop us from sending more than the terminal can show.
+const MIN_FRAME_INTERVAL: Duration = Duration::from_micros(1_000_000 / 30);
+
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
@@ -300,6 +305,8 @@ struct App {
     frames: u32,
     fps: f32,
     stats_at: Instant,
+    /// When the last frame went to the terminal (for the frame-rate cap).
+    last_paint: Instant,
     snapshot_path: Option<String>,
 }
 
@@ -615,9 +622,17 @@ impl App {
     // -- output -------------------------------------------------------------
 
     fn paint_frame(&mut self) {
-        if !self.delegate.frame_ready.replace(false) {
+        // While the terminal is still reading the last frame, or the frame-rate
+        // cap is not done, keep `frame_ready` set and paint the newest frame
+        // later. Frames in between drop.
+        if !self.delegate.frame_ready.get()
+            || self.last_paint.elapsed() < MIN_FRAME_INTERVAL
+            || !self.kitty.ready()
+        {
             return;
         }
+        self.delegate.frame_ready.set(false);
+        self.last_paint = Instant::now();
         let (w, h) = self.render_size;
         self.webview().paint();
         let rect =
@@ -838,6 +853,7 @@ fn main() {
         frames: 0,
         fps: 0.0,
         stats_at: Instant::now(),
+        last_paint: Instant::now() - MIN_FRAME_INTERVAL,
         snapshot_path: std::env::var("SERVO_TERM_SNAPSHOT").ok(),
     };
 
@@ -869,5 +885,6 @@ fn main() {
         app.draw_chrome();
     }
 
+    app.kitty.discard_in_flight();
     term::leave();
 }

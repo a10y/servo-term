@@ -188,20 +188,60 @@ fn write_shm(name: &str, pixels: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+/// True while the shared memory object `name` exists (the terminal has not read it yet).
+fn shm_exists(name: &str) -> bool {
+    let cname = std::ffi::CString::new(name).unwrap();
+    let fd = unsafe { libc::shm_open(cname.as_ptr(), libc::O_RDONLY, 0 as libc::c_uint) };
+    if fd >= 0 {
+        unsafe { libc::close(fd) };
+        return true;
+    }
+    // Any error other than "not found" (for example EACCES) counts as "still there".
+    io::Error::last_os_error().raw_os_error() != Some(libc::ENOENT)
+}
+
+fn shm_unlink(name: &str) {
+    let cname = std::ffi::CString::new(name).unwrap();
+    unsafe { libc::shm_unlink(cname.as_ptr()) };
+}
+
+/// If the terminal does not unlink a frame in this time, we unlink it and go on.
+const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[derive(Default)]
 pub struct Kitty {
     frame_no: u64,
     /// Two image ids in turn, so the old frame stays until the new one is placed.
     current_id: Option<u32>,
+    /// The last frame sent, until the terminal unlinks it (its "ack").
+    in_flight: Option<(String, Instant)>,
 }
 
 impl Kitty {
+    /// Backpressure: true when the terminal has read the last frame, so a new
+    /// frame can go. The terminal unlinks each shared memory object after it
+    /// reads it; while the object exists, the terminal is behind.
+    pub fn ready(&mut self) -> bool {
+        let Some((name, sent)) = &self.in_flight else { return true };
+        if shm_exists(name) {
+            if sent.elapsed() < FRAME_ACK_TIMEOUT {
+                return false;
+            }
+            // The terminal could not read it (or never will). Do not leak it.
+            eprintln!("kitty: frame {name} not read after {FRAME_ACK_TIMEOUT:?}; unlinking");
+            shm_unlink(name);
+        }
+        self.in_flight = None;
+        true
+    }
+
     /// Place the frame on row 2, scaled to cover the page area.
     pub fn show(&mut self, img: &servo::RgbaImage, geom: Geom) -> io::Result<()> {
         self.frame_no += 1;
         let name = format!("/svt{}-{}", std::process::id(), self.frame_no);
         let bytes = img.as_raw();
         write_shm(&name, bytes)?;
+        self.in_flight = Some((name.clone(), Instant::now()));
 
         let id = if self.current_id == Some(1) { 2 } else { 1 };
         let b64 = base64::engine::general_purpose::STANDARD.encode(&name);
@@ -228,5 +268,12 @@ impl Kitty {
         let _ = out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\\x1b[2J");
         let _ = out.flush();
         self.current_id = None;
+    }
+
+    /// Remove a frame the terminal has not read (call on exit).
+    pub fn discard_in_flight(&mut self) {
+        if let Some((name, _)) = self.in_flight.take() {
+            shm_unlink(&name);
+        }
     }
 }
